@@ -137,6 +137,17 @@ CREATE TABLE IF NOT EXISTS projects (
 
 	UNIQUE(title, organization_id)
 );
+
+CREATE TABLE IF NOT EXISTS api_keys (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+	title TEXT NOT NULL,
+	key_hash TEXT NOT NULL,
+	permissions TEXT NOT NULL,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+	UNIQUE (title, project_id)
+)
 `
 
 	if _, err := DB.Exec(schema); err != nil {

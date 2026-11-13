@@ -16,6 +16,26 @@ var ErrProjectAlreadyExists = errors.New("repository: project already exists")
 // organization.
 var ErrProjectNotFound = errors.New("repository: project not found")
 
+// Permissions accepted for an API key.
+const (
+	// APIKeyPermissionAll grants every operation.
+	APIKeyPermissionAll = "all"
+	// APIKeyPermissionView grants read access.
+	APIKeyPermissionView = "view"
+	// APIKeyPermissionDelete grants delete access.
+	APIKeyPermissionDelete = "delete"
+	// APIKeyPermissionInsert grants insert access.
+	APIKeyPermissionInsert = "insert"
+)
+
+// ErrInvalidAPIKeyPermission is returned when an API key permission is not one
+// of the supported values.
+var ErrInvalidAPIKeyPermission = errors.New("repository: invalid API key permission")
+
+// ErrAPIKeyAlreadyExists is returned when a project already has an API key with
+// the same title.
+var ErrAPIKeyAlreadyExists = errors.New("repository: API key already exists")
+
 // InsertNewProject stores a project titled title for organizationID and returns
 // the new project's ID.
 // It returns ErrProjectAlreadyExists when the organization already has a project
@@ -73,6 +93,82 @@ func DeleteProject(organizationID, projectID int64) error {
 	}
 
 	return nil
+}
+
+// InsertAPIKey stores an API key hash, titled title, for projectID and returns
+// the new key's ID. permissions must be one of APIKeyPermissionAll,
+// APIKeyPermissionView, APIKeyPermissionDelete, or APIKeyPermissionInsert.
+// It returns ErrInvalidAPIKeyPermission when permissions is not supported and
+// ErrAPIKeyAlreadyExists when the project already has a key with the same
+// title.
+func InsertAPIKey(projectID int64, title, keyHash, permissions string) (int64, error) {
+	if store.DB == nil {
+		return 0, ErrDatabaseNotConnected
+	}
+
+	if !IsValidAPIKeyPermission(permissions) {
+		return 0, ErrInvalidAPIKeyPermission
+	}
+
+	result, err := store.DB.Exec(
+		"INSERT INTO api_keys (project_id, title, key_hash, permissions) VALUES (?, ?, ?, ?)",
+		projectID,
+		title,
+		keyHash,
+		permissions,
+	)
+	if err != nil {
+		if store.IsUniqueError(err) {
+			return 0, ErrAPIKeyAlreadyExists
+		}
+
+		return 0, fmt.Errorf("repository: insert API key: %w", err)
+	}
+
+	apiKeyID, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("repository: get API key ID: %w", err)
+	}
+
+	return apiKeyID, nil
+}
+
+// IsValidAPIKeyPermission reports whether permission is a supported API key
+// permission.
+func IsValidAPIKeyPermission(permission string) bool {
+	switch permission {
+	case APIKeyPermissionAll,
+		APIKeyPermissionView,
+		APIKeyPermissionDelete,
+		APIKeyPermissionInsert:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProjectExists reports whether projectID belongs to organizationID.
+func ProjectExists(organizationID, projectID int64) (bool, error) {
+	if store.DB == nil {
+		return false, ErrDatabaseNotConnected
+	}
+
+	var id int64
+
+	err := store.DB.QueryRow(
+		"SELECT id FROM projects WHERE id = ? AND organization_id = ?",
+		projectID,
+		organizationID,
+	).Scan(&id)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("repository: check project: %w", err)
+	}
+
+	return true, nil
 }
 
 // IsOrganizationOwner reports whether userID is the owner of organizationID.

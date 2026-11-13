@@ -48,6 +48,11 @@ func Router() *chi.Mux {
 		).Delete(
 			"/organizations/{organization_id}/projects/{project_id}", projects.DeleteProjectHandler,
 		)
+		r.With(
+			middlewares.AuthMiddleware,
+		).Post(
+			"/organizations/{organization_id}/projects/{project_id}/api-keys", projects.CreateNewAPIKey,
+		)
 	})
 	return router
 }
