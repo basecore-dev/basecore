@@ -1,0 +1,38 @@
+# Derlenmiş ikili dosyalar
+/basecore
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test çıktıları
+*.test
+*.out
+coverage.*
+/coverage/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Yerel veritabanı dosyaları
+*.db
+*.db-shm
+*.db-wal
+
+# Yerel yapılandırma ve secret'lar
+.basecore/
+.env
+.env.*
+!.env.example
+
+# Editör / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# İşletim sistemi dosyaları
+.DS_Store
+Thumbs.db
