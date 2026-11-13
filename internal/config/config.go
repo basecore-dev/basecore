@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/zalando/go-keyring"
 )
@@ -47,6 +48,16 @@ func Init() error {
 // GetBaseCorePath returns the path initialized by Init.
 func GetBaseCorePath() string {
 	return BaseCorePath
+}
+
+// GetProjectsPath returns the directory where project data is stored.
+func GetProjectsPath() string {
+	return filepath.Join(BaseCorePath, "projects")
+}
+
+// GetProjectPath returns the directory where the data of projectID is stored.
+func GetProjectPath(projectID int64) string {
+	return filepath.Join(GetProjectsPath(), strconv.FormatInt(projectID, 10))
 }
 
 // SetJWTSecret stores jwtSecret in the system keyring.

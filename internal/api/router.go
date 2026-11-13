@@ -53,6 +53,11 @@ func Router() *chi.Mux {
 		).Post(
 			"/organizations/{organization_id}/projects/{project_id}/api-keys", projects.CreateNewAPIKey,
 		)
+		r.With(
+			middlewares.AuthMiddleware,
+		).Post(
+			"/organizations/{organization_id}/projects/{project_id}/databases", projects.CreateSQLiteDBHandler,
+		)
 	})
 	return router
 }

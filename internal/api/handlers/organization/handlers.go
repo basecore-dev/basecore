@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/basecore-dev/basecore/internal/api/middlewares"
 	"github.com/basecore-dev/basecore/internal/api/models"
+	"github.com/basecore-dev/basecore/internal/config"
 	"github.com/basecore-dev/basecore/internal/repository"
 	"github.com/basecore-dev/basecore/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -313,6 +316,25 @@ func DeleteOrganization(
 		return
 	}
 
+	projectIDs, err := repository.GetOrganizationProjectIDs(organizationID)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrDatabaseNotConnected):
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": "database_not_connected",
+			})
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": "organization_projects_lookup_failed",
+			})
+		}
+
+		return
+	}
+
 	err = repository.DeleteOrganization(organizationID, int64(claims.UserID))
 
 	if err != nil {
@@ -340,6 +362,12 @@ func DeleteOrganization(
 		}
 
 		return
+	}
+
+	for _, projectID := range projectIDs {
+		if err := os.RemoveAll(config.GetProjectPath(projectID)); err != nil {
+			log.Printf("remove project %d folder: %v", projectID, err)
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)

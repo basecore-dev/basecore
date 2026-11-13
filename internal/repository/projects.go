@@ -133,6 +133,41 @@ func InsertAPIKey(projectID int64, title, keyHash, permissions string) (int64, e
 	return apiKeyID, nil
 }
 
+// GetOrganizationProjectIDs returns the IDs of the projects that belong to
+// organizationID.
+func GetOrganizationProjectIDs(organizationID int64) ([]int64, error) {
+	if store.DB == nil {
+		return nil, ErrDatabaseNotConnected
+	}
+
+	rows, err := store.DB.Query(
+		"SELECT id FROM projects WHERE organization_id = ? ORDER BY id",
+		organizationID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("repository: query organization projects: %w", err)
+	}
+	defer rows.Close()
+
+	projectIDs := make([]int64, 0)
+
+	for rows.Next() {
+		var projectID int64
+
+		if err := rows.Scan(&projectID); err != nil {
+			return nil, fmt.Errorf("repository: scan organization project: %w", err)
+		}
+
+		projectIDs = append(projectIDs, projectID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("repository: iterate organization projects: %w", err)
+	}
+
+	return projectIDs, nil
+}
+
 // IsValidAPIKeyPermission reports whether permission is a supported API key
 // permission.
 func IsValidAPIKeyPermission(permission string) bool {

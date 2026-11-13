@@ -7,16 +7,24 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/basecore-dev/basecore/internal/api/middlewares"
 	"github.com/basecore-dev/basecore/internal/api/models"
+	"github.com/basecore-dev/basecore/internal/config"
 	"github.com/basecore-dev/basecore/internal/repository"
 	"github.com/basecore-dev/basecore/internal/store"
 	"github.com/go-chi/chi/v5"
 )
+
+const maxSQLiteDBTitleLength = 100
 
 func CreateNewProjectHandler(
 	w http.ResponseWriter,
@@ -183,6 +191,29 @@ func CreateNewProjectHandler(
 		return
 	}
 
+	projectPath := config.GetProjectPath(projectID)
+
+	if err := os.MkdirAll(projectPath, 0700); err != nil {
+		if cleanupErr := repository.DeleteProject(
+			int64(organizationID),
+			projectID,
+		); cleanupErr != nil {
+			log.Printf(
+				"clean up project %d after folder creation failure: %v",
+				projectID,
+				cleanupErr,
+			)
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "project_folder_creation_failed",
+		})
+
+		return
+	}
+
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]any{
 		"message":    "project_created",
@@ -305,6 +336,10 @@ func DeleteProjectHandler(
 		}
 
 		return
+	}
+
+	if err := os.RemoveAll(config.GetProjectPath(int64(projectID))); err != nil {
+		log.Printf("remove project folder: %v", err)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -568,5 +603,265 @@ func CreateNewAPIKey(
 		"message":    "api_key_created",
 		"api_key_id": apiKeyID,
 		"apiKey":     apiKey,
+	})
+}
+
+// CreateSQLiteDBHandler creates a SQLite database file inside a project's
+// folder when the authenticated user is the organization's owner.
+func CreateSQLiteDBHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "method_not_allowed",
+		})
+		return
+	}
+
+	if store.DB == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "database_not_connected",
+		})
+		return
+	}
+
+	claims, ok := middlewares.GetClaims(r)
+
+	if !ok {
+		w.WriteHeader(http.StatusUnauthorized)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "unauthorized",
+		})
+
+		return
+	}
+
+	organizationID, err := strconv.Atoi(
+		chi.URLParam(r, "organization_id"),
+	)
+
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "invalid_organization_id",
+		})
+
+		return
+	}
+
+	projectID, err := strconv.Atoi(
+		chi.URLParam(r, "project_id"),
+	)
+
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "invalid_project_id",
+		})
+
+		return
+	}
+
+	var existingOrganizationID int64
+
+	err = store.DB.QueryRow(
+		"SELECT id FROM organizations WHERE id = ?",
+		organizationID,
+	).Scan(&existingOrganizationID)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		w.WriteHeader(http.StatusNotFound)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "organization_not_found",
+		})
+
+		return
+	}
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "organization_lookup_failed",
+		})
+
+		return
+	}
+
+	isOwner, err := repository.IsOrganizationOwner(
+		int64(organizationID),
+		int64(claims.UserID),
+	)
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "organization_ownership_check_failed",
+		})
+
+		return
+	}
+
+	if !isOwner {
+		w.WriteHeader(http.StatusForbidden)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "not_organization_owner",
+		})
+
+		return
+	}
+
+	projectExists, err := repository.ProjectExists(
+		int64(organizationID),
+		int64(projectID),
+	)
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "project_lookup_failed",
+		})
+
+		return
+	}
+
+	if !projectExists {
+		w.WriteHeader(http.StatusNotFound)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "project_not_found",
+		})
+
+		return
+	}
+
+	var req models.CreateSQLiteDBReq
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+
+	if err := decoder.Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "invalid_json",
+		})
+
+		return
+	}
+
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		w.WriteHeader(http.StatusBadRequest)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "invalid_json",
+		})
+
+		return
+	}
+
+	req.Title = strings.TrimSpace(req.Title)
+
+	if req.Title == "" {
+		w.WriteHeader(http.StatusBadRequest)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "title_is_required",
+		})
+
+		return
+	}
+
+	if utf8.RuneCountInString(req.Title) > maxSQLiteDBTitleLength {
+		w.WriteHeader(http.StatusBadRequest)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "title_too_long",
+		})
+
+		return
+	}
+
+	if strings.HasPrefix(req.Title, ".") ||
+		strings.ContainsAny(req.Title, `/\`) ||
+		strings.ContainsFunc(req.Title, unicode.IsControl) {
+		w.WriteHeader(http.StatusBadRequest)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "invalid_title",
+		})
+
+		return
+	}
+
+	projectPath := config.GetProjectPath(int64(projectID))
+
+	if err := os.MkdirAll(projectPath, 0700); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "project_folder_creation_failed",
+		})
+
+		return
+	}
+
+	databaseFile := req.Title + ".sqlite"
+	databasePath := filepath.Join(projectPath, databaseFile)
+
+	file, err := os.OpenFile(
+		databasePath,
+		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
+		0600,
+	)
+
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			w.WriteHeader(http.StatusConflict)
+
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": "database_already_exists",
+			})
+
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "database_creation_failed",
+		})
+
+		return
+	}
+
+	if err := file.Close(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "database_creation_failed",
+		})
+
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"message":  "sqlite_database_created",
+		"database": databaseFile,
 	})
 }

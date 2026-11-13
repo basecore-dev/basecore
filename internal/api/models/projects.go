@@ -14,3 +14,10 @@ type CreateNewAPIKeyReq struct {
 	// Permissions is one of "all", "view", "delete", or "insert".
 	Permissions string `json:"permissions"`
 }
+
+// CreateSQLiteDBReq contains the title submitted when creating a project's
+// SQLite database.
+type CreateSQLiteDBReq struct {
+	// Title is the database name; the file is stored as <title>.sqlite.
+	Title string `json:"title"`
+}
